@@ -1,0 +1,15 @@
+.git
+.github
+.gitignore
+*.md
+docs
+**/*_test.go
+.env
+.env.*
+config.yaml
+*.log
+bin
+dist
+tmp
+.idea
+.vscode

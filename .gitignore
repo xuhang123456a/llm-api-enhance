@@ -1,0 +1,24 @@
+# Binaries
+/bin/
+/dist/
+/tmp/
+*.exe
+*.test
+ai-api-stronger
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+config.yaml
+!.config.example.yaml
+config.local.yaml
+
+# Logs and runtime
+*.log
+logs/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

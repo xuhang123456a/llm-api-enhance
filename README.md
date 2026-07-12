@@ -50,10 +50,23 @@ REAL_UPSTREAM_MODEL=gpt-4o-mini
 go run ./cmd -config ./config.yaml -env ./.env.local
 ```
 
-或使用辅助脚本：
+默认监听 `0.0.0.0:8888`（见 `config.example.yaml`）。
+
+### Docker
+
+镜像由 GitHub Actions 在推送到 `main` 或打 `v*` 标签时自动构建，并推送到 GitHub Container Registry：
+
+```text
+ghcr.io/xyzensun/llm-api-enhance:latest
+```
+
+本地构建与运行：
 
 ```bash
-./scripts/start-configtest.sh
+docker build -t ai-api-stronger .
+docker run --rm -p 8888:8888 \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  ai-api-stronger
 ```
 
 ### 请求示例
@@ -61,7 +74,7 @@ go run ./cmd -config ./config.yaml -env ./.env.local
 代理请求路径格式：`/{access_key}/proxy/{channel}/{upstream_path}`
 
 ```bash
-curl -X POST http://127.0.0.1:28080/your-access-key/proxy/openai/v1/chat/completions \
+curl -X POST http://127.0.0.1:8888/your-access-key/proxy/openai/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}'
 ```
@@ -73,7 +86,7 @@ curl -X POST http://127.0.0.1:28080/your-access-key/proxy/openai/v1/chat/complet
 ### 健康检查
 
 ```bash
-curl -H "X-Access-Key: your-access-key" http://127.0.0.1:28080/api/health
+curl -H "X-Access-Key: your-access-key" http://127.0.0.1:8888/api/health
 ```
 
 ### 配置热重载
@@ -82,7 +95,7 @@ curl -H "X-Access-Key: your-access-key" http://127.0.0.1:28080/api/health
 curl -X POST -H "X-Access-Key: your-access-key" \
   -H "Content-Type: application/json" \
   -d '{"path_type":"local","path":"./config.yaml"}' \
-  http://127.0.0.1:28080/api/config/reload
+  http://127.0.0.1:8888/api/config/reload
 ```
 
 ## 项目结构
