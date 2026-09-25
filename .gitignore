@@ -18,6 +18,9 @@ config.local.yaml
 *.log
 logs/
 
+# 运行产物：转录 JSONL 等。目录由程序启动时自动创建（见 transcript.NewJSONL）
+data/
+
 # IDE / OS
 .idea/
 .vscode/
