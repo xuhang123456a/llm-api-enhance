@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"ai-api-stronger/internal/config"
 	"ai-api-stronger/internal/planner"
 	"ai-api-stronger/internal/privacy"
 	"ai-api-stronger/internal/response"
 	"ai-api-stronger/internal/streaming"
+	"ai-api-stronger/internal/transcript"
 	"ai-api-stronger/internal/upstream"
 )
 
@@ -23,6 +25,8 @@ type Pipeline struct {
 	Clients       *upstream.Manager
 	Privacy       privacy.Processor
 	FakeStreaming streaming.Boundary
+	// Transcript 为 nil 时不产生任何转录记录。
+	Transcript *transcript.Sink
 }
 
 type streamingDecision struct {
@@ -32,9 +36,17 @@ type streamingDecision struct {
 }
 
 func (p Pipeline) Execute(w http.ResponseWriter, r *http.Request, plan *planner.ExecutionPlan, originalBody []byte) {
+	started := time.Now()
+	// 会话标识按请求体推导：同一段对话的多次请求会得到同一个值，
+	// 供配置里的 ${session_id} 占位符使用（见 session.go），
+	// 同时写入转录便于按「工具 × 对话」聚合。
+	sessionID := SessionIDFromBody(originalBody)
+	observation := newRequestObservation(p.Transcript, plan, r, originalBody, sessionID, started)
+
 	transformedRequest, err := TransformRequestBody(plan.UpstreamFormat, originalBody, plan.ModelName, plan.RequestBodyPlan)
 	if err != nil {
 		response.WriteError(w, response.CodeBodyProcessingFailed, err.Error())
+		observation.recordFailure(err)
 		return
 	}
 
@@ -51,13 +63,15 @@ func (p Pipeline) Execute(w http.ResponseWriter, r *http.Request, plan *planner.
 		return
 	}
 
-	upstreamHeaders := ApplyRequestHeaders(r.Header, plan.RequestHeaderPlan, plan.RequestID)
+	requestHeaderPlan := plan.RequestHeaderPlan
+	requestHeaderPlan.SessionID = sessionID
+	upstreamHeaders := ApplyRequestHeaders(r.Header, requestHeaderPlan, plan.RequestID)
 	if plan.LLMPrivateProtect {
-		p.executePrivacyProtectedRequest(w, requestContext, r, plan, upstreamHeaders, upstreamBody, decision.UseFakeStreamResponse)
+		p.executePrivacyProtectedRequest(w, requestContext, r, plan, upstreamHeaders, upstreamBody, decision, observation)
 		return
 	}
 
-	p.executeDirectUpstreamRequest(w, requestContext, r.Method, plan, upstreamHeaders, upstreamBody, decision.UseFakeStreamResponse)
+	p.executeDirectUpstreamRequest(w, requestContext, r.Method, plan, upstreamHeaders, upstreamBody, decision, observation)
 }
 
 func decideStreaming(plan *planner.ExecutionPlan, r *http.Request, transformedBody []byte) streamingDecision {
@@ -99,7 +113,7 @@ func writeStreamingPreparationError(w http.ResponseWriter, err error) {
 	response.WriteError(w, response.CodeBodyProcessingFailed, "failed to shape non-stream upstream request")
 }
 
-func (p Pipeline) executePrivacyProtectedRequest(w http.ResponseWriter, ctx context.Context, r *http.Request, plan *planner.ExecutionPlan, headers http.Header, body []byte, useFakeStream bool) {
+func (p Pipeline) executePrivacyProtectedRequest(w http.ResponseWriter, ctx context.Context, r *http.Request, plan *planner.ExecutionPlan, headers http.Header, body []byte, decision streamingDecision, observation *requestObservation) {
 	privacyProcessor := p.Privacy
 	if privacyProcessor == nil {
 		response.WriteError(w, response.CodeInternalError, "privacy processor is not configured")
@@ -115,14 +129,17 @@ func (p Pipeline) executePrivacyProtectedRequest(w http.ResponseWriter, ctx cont
 	})
 	if err != nil || protectedResponse == nil {
 		response.WriteError(w, response.CodeInternalError, "privacy protection failed")
+		observation.recordFailure(errors.New("privacy protection failed"))
 		return
 	}
 	defer protectedResponse.Body.Close()
 
-	p.writeBufferedResponse(w, protectedResponse, plan, useFakeStream)
+	finish := observation.observe(protectedResponse, decision.ClientWantsStream)
+	p.writeBufferedResponse(w, protectedResponse, plan, decision.UseFakeStreamResponse)
+	finish(nil)
 }
 
-func (p Pipeline) executeDirectUpstreamRequest(w http.ResponseWriter, ctx context.Context, method string, plan *planner.ExecutionPlan, headers http.Header, body []byte, useFakeStream bool) {
+func (p Pipeline) executeDirectUpstreamRequest(w http.ResponseWriter, ctx context.Context, method string, plan *planner.ExecutionPlan, headers http.Header, body []byte, decision streamingDecision, observation *requestObservation) {
 	clientManager := p.Clients
 	if clientManager == nil {
 		clientManager = upstream.NewManager()
@@ -133,20 +150,26 @@ func (p Pipeline) executeDirectUpstreamRequest(w http.ResponseWriter, ctx contex
 	upstreamRequest, err := upstream.NewRequest(ctx, method, plan.UpstreamURL, headers, body)
 	if err != nil {
 		response.WriteError(w, response.CodeInternalError, "failed to build upstream request")
+		observation.recordFailure(err)
 		return
 	}
 	upstreamResponse, err := managedClient.Client().Do(upstreamRequest)
 	if err != nil {
 		writeUpstreamRequestError(w, err)
+		observation.recordFailure(err)
 		return
 	}
 	defer upstreamResponse.Body.Close()
 
-	if useFakeStream {
+	finish := observation.observe(upstreamResponse, decision.ClientWantsStream)
+
+	if decision.UseFakeStreamResponse {
 		p.writeBufferedResponse(w, upstreamResponse, plan, true)
+		finish(nil)
 		return
 	}
-	_ = writeTransparentUpstreamResponse(w, upstreamResponse, plan)
+	err = writeTransparentUpstreamResponse(w, upstreamResponse, plan)
+	finish(err)
 }
 
 func writeUpstreamRequestError(w http.ResponseWriter, err error) {

@@ -123,6 +123,37 @@ channels:
 	}
 }
 
+// ${session_id} 属于运行时占位符，必须在环境变量展开阶段原样保留。
+// 若被当作环境变量展开，会变成空串，请求头静默丢失（本仓库曾出现该缺陷）。
+func TestLoadFilePreservesSessionIDRuntimeVariable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+security: {access_key: test-access-value}
+channels:
+  opencode-go:
+    enabled: true
+    upstream: {base_url: https://opencode.ai/zen/go, format: openai}
+    channel_policy:
+      request_headers:
+        set:
+          x-opencode-session: ${session_id}
+          X-Mixed: ${session_id}-${ORIGIN}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	set := cfg.Channels["opencode-go"].ChannelPolicy.RequestHeaders.Set
+	if got := set["x-opencode-session"]; got != "${session_id}" {
+		t.Fatalf("session_id placeholder was not preserved: %q", got)
+	}
+	if got := set["X-Mixed"]; got != "${session_id}-${ORIGIN}" {
+		t.Fatalf("mixed runtime variables = %q", got)
+	}
+}
+
 func TestLoadEnvDoesNotOverrideExistingEnvironment(t *testing.T) {
 	t.Setenv("REAL_UPSTREAM_BASE_URL", "https://existing.example")
 	if err := LoadEnv([]byte("REAL_UPSTREAM_BASE_URL=https://from-file.example\nREAL_UPSTREAM_MODEL='model-name'\n")); err != nil {
@@ -251,5 +282,114 @@ channels:
 	}
 	if proxies[1].Type != "socks5" || proxies[1].Address != "socks5://127.0.0.1:1080" {
 		t.Fatalf("second compiled proxy = %#v", proxies[1])
+	}
+}
+
+// 多访问密钥用于按客户端工具归因，必须拒绝重复密钥、重复标签和过短的密钥。
+func TestValidateAccessKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"duplicate key", `
+security:
+  access_key: test-access-value
+  access_keys:
+    - {key: workbuddy-key-1, label: WorkBuddy}
+    - {key: workbuddy-key-1, label: Qoder}
+`},
+		{"duplicate label", `
+security:
+  access_key: test-access-value
+  access_keys:
+    - {key: workbuddy-key-1, label: WorkBuddy}
+    - {key: qoder-key-0001, label: WorkBuddy}
+`},
+		{"short key", `
+security:
+  access_key: test-access-value
+  access_keys:
+    - {key: short, label: WorkBuddy}
+`},
+		{"missing label", `
+security:
+  access_key: test-access-value
+  access_keys:
+    - {key: workbuddy-key-1, label: "  "}
+`},
+		{"key shadows access_key", `
+security:
+  access_key: test-access-value
+  access_keys:
+    - {key: test-access-value, label: WorkBuddy}
+`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := LoadBytes([]byte(testCase.yaml + `
+channels:
+  openai:
+    enabled: true
+    upstream: {base_url: https://example.com, format: openai}
+`)); err == nil {
+			t.Fatal("expected a validation error")
+		}
+		})
+	}
+}
+
+func TestSnapshotMapsAccessKeysToToolLabels(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+security:
+  access_key: test-access-value
+  access_keys:
+    - {key: workbuddy-key-1, label: WorkBuddy}
+    - {key: qoder-key-0001, label: Qoder}
+channels:
+  openai:
+    enabled: true
+    upstream: {base_url: https://example.com, format: openai}
+`))
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	snapshot, err := BuildSnapshot(cfg)
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+	for key, want := range map[string]string{
+		"test-access-value": "default",
+		"workbuddy-key-1":   "WorkBuddy",
+		"qoder-key-0001":    "Qoder",
+	} {
+		got, ok := snapshot.LabelForAccessKey(key)
+		if !ok || got != want {
+			t.Fatalf("LabelForAccessKey(%q) = %q, %v; want %q", key, got, ok, want)
+		}
+	}
+	if _, ok := snapshot.LabelForAccessKey("unknown-key-000"); ok {
+		t.Fatal("unknown key must not resolve")
+	}
+}
+
+func TestValidateTranscriptRequiresPathWhenEnabled(t *testing.T) {
+	base := `
+security: {access_key: test-access-value}
+channels:
+  openai:
+    enabled: true
+    upstream: {base_url: https://example.com, format: openai}
+`
+	if _, err := LoadBytes([]byte(base + "transcript: {enable: true}\n")); err == nil {
+		t.Fatal("expected transcript.path to be required")
+	}
+	if _, err := LoadBytes([]byte(base + "transcript: {enable: true, path: ./t.jsonl, max_body_bytes: -1}\n")); err == nil {
+		t.Fatal("expected negative max_body_bytes to be rejected")
+	}
+	if _, err := LoadBytes([]byte(base + "transcript: {enable: true, path: ./t.jsonl}\n")); err != nil {
+		t.Fatalf("valid transcript config rejected: %v", err)
+	}
+	if _, err := LoadBytes([]byte(base + "transcript: {enable: false}\n")); err != nil {
+		t.Fatalf("disabled transcript must not require a path: %v", err)
 	}
 }

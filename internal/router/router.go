@@ -8,6 +8,7 @@ import (
 	"ai-api-stronger/internal/pipeline"
 	"ai-api-stronger/internal/privacy"
 	"ai-api-stronger/internal/response"
+	"ai-api-stronger/internal/transcript"
 	"ai-api-stronger/internal/upstream"
 )
 
@@ -21,11 +22,13 @@ type Handler struct {
 	Privacy privacy.Processor
 	// ConfigPath 是管理接口默认重载的配置文件路径。
 	ConfigPath string
+	// Transcript 是请求/响应转录出口，为 nil 时不记录。
+	Transcript *transcript.Sink
 }
 
 // New 创建包含管理与代理路由的 HTTP handler。
-func New(store *config.SnapshotStore, clients *upstream.Manager, privacyProcessor privacy.Processor, configPath string) http.Handler {
-	return &Handler{Store: store, Clients: clients, Privacy: privacyProcessor, ConfigPath: configPath}
+func New(store *config.SnapshotStore, clients *upstream.Manager, privacyProcessor privacy.Processor, configPath string, transcriptSink *transcript.Sink) http.Handler {
+	return &Handler{Store: store, Clients: clients, Privacy: privacyProcessor, ConfigPath: configPath, Transcript: transcriptSink}
 }
 
 // ServeHTTP 根据路径前缀分派管理接口或代理接口。
@@ -53,5 +56,5 @@ func (h *Handler) snapshotOrError(w http.ResponseWriter) *config.RuntimeSnapshot
 
 // pipeline 用当前 handler 依赖构造一次请求执行管线。
 func (h *Handler) pipeline() pipeline.Pipeline {
-	return pipeline.Pipeline{Clients: h.Clients, Privacy: h.Privacy}
+	return pipeline.Pipeline{Clients: h.Clients, Privacy: h.Privacy, Transcript: h.Transcript}
 }

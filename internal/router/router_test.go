@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -192,7 +193,7 @@ func TestSuccessfulReloadMarksExistingClientsDrainingAndUsesNewSnapshot(t *testi
 
 	validPath := writeConfigFile(t, newUpstream.URL, "test-access-value")
 	rr = httptest.NewRecorder()
-	req = httptest.NewRequest("POST", "/api/config/reload", strings.NewReader(`{"path_type":"local","path":"`+validPath+`"}`))
+	req = httptest.NewRequest("POST", "/api/config/reload", bytes.NewReader(reloadRequestBody(t, validPath)))
 	req.Header.Set("X-Access-Key", "test-access-value")
 	h.ServeHTTP(rr, req)
 	var env response.Envelope
@@ -215,10 +216,22 @@ func TestSuccessfulReloadMarksExistingClientsDrainingAndUsesNewSnapshot(t *testi
 	}
 }
 
+// reloadRequestBody 构造 /api/config/reload 的请求体。
+// 必须走 json.Marshal：Windows 的临时路径含反斜杠，
+// 直接拼进 JSON 字符串会产生非法转义（如 \U），导致服务端解码失败。
+func reloadRequestBody(t *testing.T, path string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"path_type": "local", "path": path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func assertFailedReloadPreservesSnapshot(t *testing.T, h *Handler, path, wantHash string) {
 	t.Helper()
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/config/reload", strings.NewReader(`{"path_type":"local","path":"`+path+`"}`))
+	req := httptest.NewRequest("POST", "/api/config/reload", bytes.NewReader(reloadRequestBody(t, path)))
 	req.Header.Set("X-Access-Key", "test-access-value")
 	h.ServeHTTP(rr, req)
 	var env response.Envelope

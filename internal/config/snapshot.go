@@ -10,8 +10,23 @@ type RuntimeSnapshot struct {
 	Security   SecurityConfig
 	Runtime    RuntimeConfig
 	Log        LogConfig
+	Transcript *TranscriptConfig
 	Privacy    *LLMPrivateProtectConfig
 	Channels   map[string]*ChannelRuntime
+	// accessKeyLabels 把访问密钥映射到工具标签，编译期构建后只读。
+	accessKeyLabels map[string]string
+}
+
+// LabelForAccessKey 返回该访问密钥对应的工具标签。
+// 命中 security.access_key 时标签为 "default"；未配置多密钥时这是唯一可用路径。
+func (s *RuntimeSnapshot) LabelForAccessKey(key string) (string, bool) {
+	if s == nil || key == "" {
+		return "", false
+	}
+	if label, ok := s.accessKeyLabels[key]; ok {
+		return label, true
+	}
+	return "", false
 }
 
 type ChannelRuntime struct {
@@ -79,13 +94,19 @@ func BuildSnapshot(cfg *Config) (*RuntimeSnapshot, error) {
 		return nil, err
 	}
 	snapshot := &RuntimeSnapshot{
-		ConfigHash: configHash,
-		Server:     cfg.Server,
-		Security:   cfg.Security,
-		Runtime:    cfg.Runtime,
-		Log:        cfg.Log,
-		Privacy:    clonePrivacy(cfg.Privacy),
-		Channels:   make(map[string]*ChannelRuntime, len(cfg.Channels)),
+		ConfigHash:      configHash,
+		Server:          cfg.Server,
+		Security:        cfg.Security,
+		Runtime:         cfg.Runtime,
+		Log:             cfg.Log,
+		Transcript:      cloneTranscript(cfg.Transcript),
+		Privacy:         clonePrivacy(cfg.Privacy),
+		Channels:        make(map[string]*ChannelRuntime, len(cfg.Channels)),
+		accessKeyLabels: make(map[string]string, len(cfg.Security.AccessKeys)+1),
+	}
+	snapshot.accessKeyLabels[cfg.Security.AccessKey] = "default"
+	for _, entry := range cfg.Security.AccessKeys {
+		snapshot.accessKeyLabels[entry.Key] = entry.Label
 	}
 	for channelName, channelConfig := range cfg.Channels {
 		channelPolicy, err := compilePolicy(channelConfig.ChannelPolicy)
@@ -173,6 +194,14 @@ func splitPath(path string) []string {
 		}
 	}
 	return parts
+}
+
+func cloneTranscript(in *TranscriptConfig) *TranscriptConfig {
+	if in == nil {
+		return nil
+	}
+	value := *in
+	return &value
 }
 
 func clonePrivacy(in *LLMPrivateProtectConfig) *LLMPrivateProtectConfig {

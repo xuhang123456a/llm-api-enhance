@@ -11,12 +11,26 @@ const (
 )
 
 type Config struct {
-	Server   ServerConfig             `yaml:"server" json:"server"`
-	Security SecurityConfig           `yaml:"security" json:"security"`
-	Runtime  RuntimeConfig            `yaml:"runtime" json:"runtime"`
-	Log      LogConfig                `yaml:"log" json:"log"`
-	Privacy  *LLMPrivateProtectConfig `yaml:"llm_private_protect_config" json:"llm_private_protect_config,omitempty"`
-	Channels map[string]ChannelConfig `yaml:"channels" json:"channels"`
+	Server     ServerConfig             `yaml:"server" json:"server"`
+	Security   SecurityConfig           `yaml:"security" json:"security"`
+	Runtime    RuntimeConfig            `yaml:"runtime" json:"runtime"`
+	Log        LogConfig                `yaml:"log" json:"log"`
+	Transcript *TranscriptConfig        `yaml:"transcript" json:"transcript,omitempty"`
+	Privacy    *LLMPrivateProtectConfig `yaml:"llm_private_protect_config" json:"llm_private_protect_config,omitempty"`
+	Channels   map[string]ChannelConfig `yaml:"channels" json:"channels"`
+}
+
+// TranscriptConfig 控制请求/响应转录。
+// 每条记录一行 JSON，用于回答「哪个客户端工具发了什么、花了多少 token」，
+// 是横向对比场景下按工具归因的依据。默认关闭：转录会落盘完整的提示词内容。
+type TranscriptConfig struct {
+	Enable bool `yaml:"enable" json:"enable"`
+	// Path 是 JSONL 输出路径，相对路径以进程工作目录为基准。
+	Path string `yaml:"path" json:"path"`
+	// CaptureBodies 为真时记录请求体与响应体原文；为假时只记录长度。
+	CaptureBodies bool `yaml:"capture_bodies" json:"capture_bodies"`
+	// MaxBodyBytes 限制单次记录中请求体/响应体各自的最大捕获字节数，超出部分截断。
+	MaxBodyBytes int `yaml:"max_body_bytes" json:"max_body_bytes"`
 }
 
 type ServerConfig struct {
@@ -29,7 +43,17 @@ type ServerConfig struct {
 }
 
 type SecurityConfig struct {
+	// AccessKey 是默认访问密钥，客户端把它填在路径第一段。
 	AccessKey string `yaml:"access_key" json:"access_key"`
+	// AccessKeys 允许为每个客户端工具分配独立密钥，从而在转录中按工具归因。
+	// 未配置时只有 AccessKey 可用，其标签为 "default"。
+	AccessKeys []AccessKeyConfig `yaml:"access_keys" json:"access_keys,omitempty"`
+}
+
+// AccessKeyConfig 把一个访问密钥映射到一个便于阅读的工具标签。
+type AccessKeyConfig struct {
+	Key   string `yaml:"key" json:"key"`
+	Label string `yaml:"label" json:"label"`
 }
 
 type RuntimeConfig struct {

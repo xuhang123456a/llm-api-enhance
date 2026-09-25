@@ -1,0 +1,65 @@
+# 自检用配置：把上游指向本地回显服务，用来验证请求头注入与转录是否符合预期。
+# 与 config.opencode-go.yaml 的唯一区别是 upstream.base_url 指向本地回显端口。
+
+server:
+  listen_address: 127.0.0.1
+  listen_port: 8898
+  read_timeout: 15s
+  write_timeout: 60s
+  idle_timeout: 60s
+  max_idle_client_num: 100
+
+security:
+  access_key: bench-local-key
+  access_keys:
+    - {key: bench-workbuddy-01, label: WorkBuddy}
+    - {key: bench-qoder-01, label: Qoder}
+
+runtime:
+  default_timeout: 60s
+
+log:
+  enable: true
+  level: info
+  retention_days: 1
+
+transcript:
+  enable: true
+  path: ./data/echo-transcripts.jsonl
+  capture_bodies: true
+  max_body_bytes: 4096
+
+llm_private_protect_config:
+  model: gpt-4o-mini
+  base_url: https://api.openai.com
+  api_key: unused
+  temperature: 0.0
+  redis: ""
+
+channels:
+  echo:
+    enabled: true
+    llm_private_protect_enable: false
+
+    upstream:
+      base_url: http://127.0.0.1:8899
+      format: openai
+
+    channel_policy:
+      timeout: 60s
+
+      request_headers:
+        set:
+          Authorization: Bearer ${OPENCODE_GO_KEY}
+          User-Agent: agent-bench-harness/1.0
+          x-opencode-session: ${session_id}
+        delete:
+          - X-Api-Key
+          - X-Goog-Api-Key
+
+      response_headers:
+        delete:
+          - Server
+          - X-Powered-By
+
+    model_rules: []

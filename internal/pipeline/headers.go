@@ -42,6 +42,6 @@ func ApplyHeaderPlanWithOriginAt(h http.Header, origin http.Header, plan planner
 	}
 	for key, value := range plan.Set {
 		value = strings.ReplaceAll(value, "${uuid}", requestID)
-		h.Set(key, interpolateRuntimeVariables(value, originalValues[key], now))
+		h.Set(key, interpolateWithSession(value, originalValues[key], now, plan.SessionID))
 	}
 }

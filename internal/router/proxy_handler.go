@@ -30,10 +30,12 @@ func (h *Handler) serveProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	route.RawQuery = r.URL.RawQuery
-	if route.AccessKey != snapshot.Security.AccessKey {
+	toolLabel, ok := snapshot.LabelForAccessKey(route.AccessKey)
+	if !ok {
 		response.WriteError(w, response.CodeAuthFailed, "authentication failed")
 		return
 	}
+	route.ToolLabel = toolLabel
 
 	channel := snapshot.Channels[route.Channel]
 	if channel == nil {

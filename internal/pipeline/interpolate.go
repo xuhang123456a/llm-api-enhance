@@ -12,9 +12,18 @@ const (
 	originToken    = "${ORIGIN}"
 	uuidToken      = "${UUID}"
 	timestampToken = "${TIMESTAMP}"
+	// sessionToken 由请求体推导（见 session.go），同一段对话内保持稳定，
+	// 用于满足上游「为每段对话发送稳定会话 ID」的要求。
+	sessionToken = "${session_id}"
 )
 
 func interpolateRuntimeVariables(template string, origin string, now time.Time) string {
+	return interpolateWithSession(template, origin, now, "")
+}
+
+// interpolateWithSession 在原有运行时变量（ORIGIN / UUID / TIMESTAMP）基础上
+// 增加 ${session_id}。sessionID 为空时该占位符展开为空串，不会残留模板文本。
+func interpolateWithSession(template string, origin string, now time.Time, sessionID string) string {
 	var builder strings.Builder
 	remaining := template
 	for {
@@ -35,13 +44,16 @@ func interpolateRuntimeVariables(template string, origin string, now time.Time) 
 		case strings.HasPrefix(remaining, timestampToken):
 			builder.WriteString(strconv.FormatInt(now.Unix(), 10))
 			remaining = remaining[len(timestampToken):]
+		case strings.HasPrefix(remaining, sessionToken):
+			builder.WriteString(sessionID)
+			remaining = remaining[len(sessionToken):]
 		}
 	}
 }
 
 func nextRuntimeTokenIndex(value string) int {
 	index := -1
-	for _, token := range []string{originToken, uuidToken, timestampToken} {
+	for _, token := range []string{originToken, uuidToken, timestampToken, sessionToken} {
 		tokenIndex := strings.Index(value, token)
 		if tokenIndex >= 0 && (index < 0 || tokenIndex < index) {
 			index = tokenIndex

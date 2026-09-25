@@ -17,6 +17,33 @@ func Validate(cfg *Config) error {
 	if len(cfg.Security.AccessKey) <= 8 {
 		return fmt.Errorf("security.access_key is required and must be longer than 8")
 	}
+	seenAccessKeys := map[string]struct{}{cfg.Security.AccessKey: {}}
+	seenLabels := map[string]struct{}{}
+	for index, entry := range cfg.Security.AccessKeys {
+		if len(entry.Key) <= 8 {
+			return fmt.Errorf("security.access_keys[%d].key must be longer than 8", index)
+		}
+		if strings.TrimSpace(entry.Label) == "" {
+			return fmt.Errorf("security.access_keys[%d].label is required", index)
+		}
+		if _, ok := seenAccessKeys[entry.Key]; ok {
+			return fmt.Errorf("security.access_keys[%d].key duplicates another access key", index)
+		}
+		seenAccessKeys[entry.Key] = struct{}{}
+		// 标签重复会让转录无法区分工具，直接拒绝。
+		if _, ok := seenLabels[entry.Label]; ok {
+			return fmt.Errorf("security.access_keys[%d].label %q duplicates another label", index, entry.Label)
+		}
+		seenLabels[entry.Label] = struct{}{}
+	}
+	if cfg.Transcript != nil && cfg.Transcript.Enable {
+		if strings.TrimSpace(cfg.Transcript.Path) == "" {
+			return fmt.Errorf("transcript.path is required when transcript.enable is true")
+		}
+		if cfg.Transcript.MaxBodyBytes < 0 {
+			return fmt.Errorf("transcript.max_body_bytes must not be negative")
+		}
+	}
 	if cfg.Server.ListenPort < 1 || cfg.Server.ListenPort > 65535 {
 		return fmt.Errorf("server.listen_port must be in range 1..65535")
 	}

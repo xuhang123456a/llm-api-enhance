@@ -8,6 +8,7 @@ import (
 	"ai-api-stronger/internal/logging"
 	"ai-api-stronger/internal/privacy"
 	"ai-api-stronger/internal/router"
+	"ai-api-stronger/internal/transcript"
 	"ai-api-stronger/internal/upstream"
 )
 
@@ -23,6 +24,8 @@ type App struct {
 	Logger logging.Logger
 	// Server 是对外提供代理和管理接口的 HTTP 服务。
 	Server *http.Server
+	// Transcript 是请求/响应转录出口，未启用时为 nil。
+	Transcript *transcript.Sink
 }
 
 // New 从配置文件构建应用依赖和 HTTP 服务。
@@ -48,7 +51,23 @@ func New(configPath string) (*App, error) {
 	if cfg.Log.Enable {
 		logger = logging.NewConsole(cfg.Log.Level)
 	}
-	h := router.New(store, clients, privacyProcessor, configPath)
+	// 转录目标在启动时确定；它持有文件句柄，不随配置热重载变化。
+	transcriptSink, err := buildTranscriptSink(cfg.Transcript)
+	if err != nil {
+		return nil, err
+	}
+	h := router.New(store, clients, privacyProcessor, configPath, transcriptSink)
 	srv := &http.Server{Addr: fmt.Sprintf("%s:%d", cfg.Server.ListenAddress, cfg.Server.ListenPort), Handler: h, ReadTimeout: cfg.Server.ReadTimeout, WriteTimeout: cfg.Server.WriteTimeout, IdleTimeout: cfg.Server.IdleTimeout}
-	return &App{Snapshot: store, Clients: clients, Privacy: privacyProcessor, Logger: logger, Server: srv}, nil
+	return &App{Snapshot: store, Clients: clients, Privacy: privacyProcessor, Logger: logger, Server: srv, Transcript: transcriptSink}, nil
+}
+
+func buildTranscriptSink(cfg *config.TranscriptConfig) (*transcript.Sink, error) {
+	if cfg == nil || !cfg.Enable {
+		return nil, nil
+	}
+	recorder, err := transcript.NewJSONL(cfg.Path)
+	if err != nil {
+		return nil, fmt.Errorf("open transcript file: %w", err)
+	}
+	return &transcript.Sink{Recorder: recorder, CaptureBodies: cfg.CaptureBodies, MaxBodyBytes: cfg.MaxBodyBytes}, nil
 }

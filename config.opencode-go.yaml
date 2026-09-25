@@ -1,0 +1,149 @@
+# OpenCode Go 专用配置 —— 供多个桌面端 Agent 共用同一个模型基座
+#
+# 用法：
+#   1. 设置环境变量 OPENCODE_GO_KEY 为你的 OpenCode Go 密钥
+#   2. go run ./cmd -config ./config.opencode-go.yaml
+#      （或先 go build -o ai-api-stronger.exe ./cmd 再运行）
+#
+# 各桌面端工具填写：
+#   Base URL : http://127.0.0.1:8888/<自己的 key>/proxy/opencode-go/v1
+#   API Key  : <自己的 key>（见下方 security.access_keys，每个工具一个）
+#   Model ID : deepseek-v4.1-flash 之类的官方模型 ID
+#
+# 关于 ${session_id}：
+#   本仓库已扩展支持该占位符，值由请求体第一条 user 消息推导，
+#   同一段对话的多次请求会得到同一个值，不同对话自动区分。
+#
+# 关于 transcript：
+#   每次请求/响应会追加写入 JSONL，包含工具标签、会话标识、模型、
+#   耗时与 token 用量。用 tools/summarize_transcript.py 可以按工具汇总。
+
+server:
+  listen_address: 127.0.0.1
+  listen_port: 8888
+  read_timeout: 15s
+  write_timeout: 300s
+  idle_timeout: 60s
+  max_idle_client_num: 100
+
+security:
+  # 默认密钥：所有没单独分配密钥的客户端都用它，标签为 "default"。
+  access_key: bench-local-key
+
+  # 为每个桌面端分配独立密钥，转录里就能按工具归因。
+  # 密钥必须长于 8 个字符，且不能重复、标签不能重复。
+  # 每个被测对象一个独立密钥，转录里就能按对象归因。
+  # 标签刻意用 ASCII，保证汇总表格对齐；中文会因等宽字符宽度错位。
+  access_keys:
+    - {key: bench-workbuddy-01,   label: WorkBuddy}
+    - {key: bench-qoder-01,       label: Qoder}
+    - {key: bench-zcode-01,       label: ZCode}
+    # DSH 拆成两个变体：同一 harness，插件面不同
+    - {key: bench-dsh-01,         label: DSH-plain}
+    - {key: bench-dsh-plugins-01, label: DSH-plugins}
+    - {key: bench-codex-01,       label: Codex}
+    - {key: bench-claude-01,      label: ClaudeDesktop}
+    - {key: bench-opencode-01,    label: OpenCode}
+    - {key: bench-trae-01,        label: Trae}
+    - {key: bench-cursor-01,      label: Cursor}
+    # Antigravity 是模型锁定的，不接代理，无需密钥（作为对照组）
+
+runtime:
+  # 基准测试里单题可能跑很久，超时给足
+  default_timeout: 300s
+
+log:
+  enable: true
+  level: info
+  retention_days: 14
+
+# 请求/响应转录：按工具归因的依据。
+# 注意 capture_bodies 打开后会把各工具的完整提示词落盘，属敏感数据，注意保管。
+transcript:
+  enable: true
+  path: ./data/transcripts.jsonl
+  capture_bodies: true
+  max_body_bytes: 262144
+
+# 不启用隐私脱敏，保持请求原样转发
+llm_private_protect_config:
+  model: gpt-4o-mini
+  base_url: https://api.openai.com
+  api_key: unused
+  temperature: 0.0
+  redis: ""
+
+channels:
+  opencode-go:
+    enabled: true
+    llm_private_protect_enable: false
+
+    upstream:
+      base_url: https://opencode.ai/zen/go
+      format: openai
+
+    channel_policy:
+      timeout: 300s
+
+      request_headers:
+        set:
+          # 用环境变量注入真实密钥，避免写进配置文件
+          Authorization: Bearer ${OPENCODE_GO_KEY}
+          # 上游要求：使用工具自身的专属标识，而非通用 SDK 名
+          User-Agent: agent-bench-harness/1.0
+          # 上游要求：每段对话一个稳定会话 ID（本仓库扩展实现）
+          x-opencode-session: ${session_id}
+        delete:
+          # 客户端自带的鉴权头必须清掉，否则会与上面的 set 冲突
+          - X-Api-Key
+          - X-Goog-Api-Key
+
+      # 请求体不做任何改写：横评要测的就是各工具原始请求
+      # 这里保持空白，不要设置 model_rewrite / system_prompt / max_tokens / temperature
+
+      response_headers:
+        delete:
+          - Server
+          - X-Powered-By
+
+    # 不设模型规则，所有模型走同一套策略
+    model_rules: []
+
+  # Anthropic 协议渠道：与上面的 openai 渠道指向同一个上游、同一个模型，
+  # 只是协议不同。供说 Anthropic 协议的客户端使用。
+  #
+  # 用法（Claude 系工具，无需 Anthropic 账号）：
+  #   Base URL : http://127.0.0.1:8888/bench-claude-01/proxy/opencode-go-anthropic
+  #   API Key  : bench-claude-01
+  #   Claude Code 会自动在末尾拼 /v1/messages，所以 Base URL 不要带 /v1。
+  #
+  # 若 Claude Desktop 的 Gateway 设置只认 OpenAI 兼容协议，
+  # 改填 openai 渠道地址 .../proxy/opencode-go/v1 即可。
+  opencode-go-anthropic:
+    enabled: true
+    llm_private_protect_enable: false
+
+    upstream:
+      base_url: https://opencode.ai/zen/go
+      format: anthropic
+
+    channel_policy:
+      timeout: 300s
+
+      request_headers:
+        set:
+          # Claude Code 用 ANTHROPIC_AUTH_TOKEN 时会发 Authorization: Bearer。
+          # 若上游报鉴权失败，把下面这行换成 x-api-key: ${OPENCODE_GO_KEY} 再试。
+          Authorization: Bearer ${OPENCODE_GO_KEY}
+          User-Agent: agent-bench-harness/1.0
+          x-opencode-session: ${session_id}
+        delete:
+          - X-Api-Key
+          - X-Goog-Api-Key
+
+      response_headers:
+        delete:
+          - Server
+          - X-Powered-By
+
+    model_rules: []

@@ -90,7 +90,10 @@ func expandConfigEnv(input string) string {
 
 func isRuntimeVariableName(name string) bool {
 	switch name {
-	case "ORIGIN", "UUID", "TIMESTAMP", "uuid":
+	// 这些占位符由运行时插值处理，不能在这里当作环境变量展开掉。
+	// session_id 由请求体推导（见 internal/pipeline/session.go），
+	// 若漏掉它，${session_id} 会被展开成空串，导致请求头丢失。
+	case "ORIGIN", "UUID", "TIMESTAMP", "uuid", "session_id":
 		return true
 	default:
 		return false

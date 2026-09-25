@@ -20,12 +20,16 @@ type RouteInfo struct {
 	Channel   string
 	TailPath  string
 	RawQuery  string
+	// ToolLabel 是访问密钥对应的客户端工具标签（如 "WorkBuddy"），
+	// 由 router 在鉴权时解析后填入，仅用于观测与转录，不影响转发。
+	ToolLabel string
 }
 
 // ExecutionPlan is the only request strategy object consumed by pipeline. It
 // contains typed, immutable request-time data and never retains raw YAML nodes.
 type ExecutionPlan struct {
 	RequestID          string
+	ToolLabel          string
 	ChannelName        string
 	ModelName          string
 	UpstreamURL        string
@@ -44,6 +48,9 @@ type ExecutionPlan struct {
 type HeaderPlan struct {
 	Set    map[string]string
 	Delete []string
+	// SessionID 由 pipeline 在请求时按请求体推导后填入，供 ${session_id}
+	// 插值使用；配置编译阶段始终为空字符串。
+	SessionID string
 }
 
 type RequestBodyPlan struct {
@@ -82,6 +89,7 @@ func BuildExecutionPlan(snapshot *config.RuntimeSnapshot, route RouteInfo, r *ht
 
 	executionPlan := &ExecutionPlan{
 		RequestID:          EnsureRequestID(r),
+		ToolLabel:          route.ToolLabel,
 		ChannelName:        channel.Name,
 		ModelName:          originalModel,
 		UpstreamURL:        upstreamURL,
